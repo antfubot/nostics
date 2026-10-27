@@ -4,7 +4,7 @@ import type {
   DiagnosticDefinition,
   Diagnostics,
 } from './diagnostic'
-import { deriveDocs, Diagnostic } from './diagnostic'
+import { deriveDocs, Diagnostic, matchCode } from './diagnostic'
 
 /**
  * Options for {@link defineProdDiagnostics}. A lean subset of
@@ -79,7 +79,7 @@ export function defineProdDiagnostics<
         return diagnostic
       }
 
-      return handle
+      return matchCode(handle, code)
     },
   })
 }

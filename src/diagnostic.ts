@@ -263,12 +263,14 @@ type ActionArgs<Params, ReporterOpts> = keyof ReporterOpts extends never
 /**
  * Per-code handle exposed by {@link defineDiagnostics}. Each code is a
  * callable: invoke it to build the diagnostic and run every reporter, or
- * prefix the call with `throw` to raise it.
+ * prefix the call with `throw` to raise it. `instanceof` checks a caught
+ * error against this code.
  *
  * @example
  * ```ts
  * diagnostics.MATH_E001({ name: 'x' })           // report
  * throw diagnostics.MATH_E001({ name: 'x' })     // throw
+ * error instanceof diagnostics.MATH_E001         // check
  * ```
  */
 export interface DiagnosticHandle<Params, ReporterOpts, Data = undefined> {
@@ -278,6 +280,12 @@ export interface DiagnosticHandle<Params, ReporterOpts, Data = undefined> {
    * or thrown with `throw`.
    */
   (...args: ActionArgs<Params, ReporterOpts>): Diagnostic<Data>
+
+  /**
+   * Narrows `error instanceof diagnostics.CODE` to this code's diagnostic:
+   * true for any {@link Diagnostic} whose `code` matches.
+   */
+  [Symbol.hasInstance](value: unknown): value is Diagnostic<Data>
 }
 
 /**
@@ -396,6 +404,24 @@ export function deriveDocs(
 }
 
 /**
+ * Makes `value instanceof handle` match any {@link Diagnostic} with `code`.
+ * Matches by code rather than handle identity because
+ * {@link defineProdDiagnostics} builds a new handle on every access.
+ * `defineProperty` because `Function.prototype[Symbol.hasInstance]` is
+ * non-writable, so plain assignment throws.
+ *
+ * @internal
+ */
+export function matchCode<Handle extends (...args: never[]) => Diagnostic>(
+  handle: Handle,
+  code: string,
+): Handle {
+  return Object.defineProperty(handle, Symbol.hasInstance, {
+    value: (value: unknown) => value instanceof Diagnostic && value.code === code,
+  })
+}
+
+/**
  * Creates a typed diagnostics object from a set of code definitions. Each
  * code becomes a callable {@link DiagnosticHandle}: invoke to report, or
  * `throw` the result to raise. No `new` required, no proxy.
@@ -435,7 +461,7 @@ export function defineDiagnostics<
       return diagnostic as Diagnostic<InferCodeData<Codes[typeof code]>>
     }
 
-    result[code] = handle as unknown as Diagnostics<Codes, Reporters>[typeof code]
+    result[code] = matchCode(handle, code) as unknown as Diagnostics<Codes, Reporters>[typeof code]
   }
 
   return result

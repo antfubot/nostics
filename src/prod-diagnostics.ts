@@ -1,5 +1,5 @@
 import type { AnyDiagnosticReporter, DiagnosticDefinition, Diagnostics } from './diagnostic'
-import { deriveDocs, normalizeHandler } from './diagnostic'
+import { createHandle } from './diagnostic'
 
 /**
  * Options for {@link defineProdDiagnostics}. A lean subset of
@@ -46,17 +46,14 @@ export function defineProdDiagnostics<
   const Codes extends Record<string, DiagnosticDefinition> = Record<string, DiagnosticDefinition>,
   const Reporters extends readonly AnyDiagnosticReporter[] = readonly AnyDiagnosticReporter[],
 >(options: DefineProdDiagnosticsOptions<Reporters> = {}): Diagnostics<Codes, Reporters, undefined> {
-  const { docsBase, reporters = [] } = options
-
   return new Proxy({} as Diagnostics<Codes, Reporters, undefined>, {
     get(_target, code) {
       // ignore symbol / non-string probes (e.g. `then`, `Symbol.toPrimitive`)
       if (typeof code !== 'string') return undefined
 
-      const docs = deriveDocs(docsBase, code)
       // the code is already the `name`; an empty `why` keeps the thrown
       // header down to `CODE` / `CODE: <docs>` instead of `CODE: CODE`
-      return normalizeHandler(code, () => ({ why: docs ?? '', docs }), reporters)
+      return createHandle(code, options, (_params, docs) => ({ why: docs ?? '' }))
     },
   })
 }

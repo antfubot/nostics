@@ -388,38 +388,41 @@ export class Diagnostic<Data = undefined> extends Error {
   }
 }
 
-/**
- * Resolves the docs URL for a code from a `docsBase` (string template or
- * resolver function). Shared by {@link defineDiagnostics} and
- * {@link defineProdDiagnostics}. Per-code `docs` overrides are handled by the
- * caller; this only covers the `docsBase`-derived case.
- *
- * @internal
- */
-export function deriveDocs(
-  docsBase: string | ((code: any) => string | undefined) | undefined,
-  code: string,
-): string | undefined {
-  return typeof docsBase === 'string' ? `${docsBase}/${code.toLowerCase()}` : docsBase?.(code)
-}
+type HandleParams = DiagnosticCallParams & Record<string, unknown>
 
-type HandlerParams = DiagnosticCallParams & Record<string, unknown>
+interface HandleOptions {
+  /** Per-code override: a string replaces the `docsBase` URL, `false` opts out. */
+  docs?: string | false
+  // `any`: `defineDiagnostics` narrows the resolver to its own code keys
+  docsBase?: string | ((code: any) => string | undefined)
+  reporters?: readonly AnyDiagnosticReporter[]
+}
 
 /**
  * Builds the runtime {@link DiagnosticHandle} for `code`, shared by
- * {@link defineDiagnostics} and {@link defineProdDiagnostics}: `resolve` turns
- * the call params into the code-specific fields, the handle adds the
- * call-site fields, runs every reporter, and matches `instanceof` by code.
+ * {@link defineDiagnostics} and {@link defineProdDiagnostics}. Resolves the
+ * docs URL once, then on each call `resolve` turns the params (and docs) into
+ * the code-specific fields; the handle adds the call-site fields, runs every
+ * reporter, and matches `instanceof` by code.
  *
  * @internal
  */
-export function normalizeHandler(
+export function createHandle(
   code: string,
-  resolve: (params: HandlerParams) => { why: string; fix?: string; docs?: string; data?: unknown },
-  reporters: readonly AnyDiagnosticReporter[],
-): (params?: HandlerParams, reporterOptions?: object) => Diagnostic<unknown> {
-  const handle = (params: HandlerParams = {}, reporterOptions: object = {}) => {
-    const { why, fix, docs, data } = resolve(params)
+  { docs: docsOverride, docsBase, reporters = [] }: HandleOptions,
+  resolve: (
+    params: HandleParams,
+    docs: string | undefined,
+  ) => { why: string; fix?: string; data?: unknown },
+): (params?: HandleParams, reporterOptions?: object) => Diagnostic<unknown> {
+  const docs =
+    docsOverride === false
+      ? undefined
+      : docsOverride ||
+        (typeof docsBase === 'string' ? `${docsBase}/${code.toLowerCase()}` : docsBase?.(code))
+
+  const handle = (params: HandleParams = {}, reporterOptions: object = {}) => {
+    const { why, fix, data } = resolve(params, docs)
     const diagnostic = new Diagnostic<unknown>(
       { code, why, fix, docs, data, cause: params.cause, sources: params.sources },
       handle,
@@ -445,26 +448,16 @@ export function defineDiagnostics<
   const Codes extends Record<string, DiagnosticDefinition>,
   const Reporters extends readonly AnyDiagnosticReporter[],
 >(options: DefineDiagnosticsOptions<Codes, Reporters>): Diagnostics<Codes, Reporters> {
-  const reporters = options.reporters ?? []
+  const { docsBase, reporters } = options
   const result = {} as Diagnostics<Codes, Reporters>
-
-  const { docsBase } = options
 
   for (const code of Object.keys(options.codes) as Extract<keyof Codes, string>[]) {
     const def = options.codes[code]
-    // skip docs if set to false, otherwise use it or derive it from docsBase
-    const docs = def.docs === false ? undefined : def.docs || deriveDocs(docsBase, code)
-
-    const handle = normalizeHandler(
-      code,
-      (params) => ({
-        why: toValueWithArgs(def.why, params),
-        fix: toValueWithArgs(def.fix, params),
-        docs,
-        data: toValueWithArgs(def.data, params),
-      }),
-      reporters,
-    )
+    const handle = createHandle(code, { docs: def.docs, docsBase, reporters }, (params) => ({
+      why: toValueWithArgs(def.why, params),
+      fix: toValueWithArgs(def.fix, params),
+      data: toValueWithArgs(def.data, params),
+    }))
 
     result[code] = handle as unknown as Diagnostics<Codes, Reporters>[typeof code]
   }

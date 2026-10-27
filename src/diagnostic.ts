@@ -403,19 +403,33 @@ export function deriveDocs(
   return typeof docsBase === 'string' ? `${docsBase}/${code.toLowerCase()}` : docsBase?.(code)
 }
 
+type HandlerParams = DiagnosticCallParams & Record<string, unknown>
+
 /**
- * Makes `value instanceof handle` match any {@link Diagnostic} with `code`.
- * Matches by code rather than handle identity because
- * {@link defineProdDiagnostics} builds a new handle on every access.
- * `defineProperty` because `Function.prototype[Symbol.hasInstance]` is
- * non-writable, so plain assignment throws.
+ * Builds the runtime {@link DiagnosticHandle} for `code`, shared by
+ * {@link defineDiagnostics} and {@link defineProdDiagnostics}: `resolve` turns
+ * the call params into the code-specific fields, the handle adds the
+ * call-site fields, runs every reporter, and matches `instanceof` by code.
  *
  * @internal
  */
-export function matchCode<Handle extends (...args: never[]) => Diagnostic>(
-  handle: Handle,
+export function normalizeHandler(
   code: string,
-): Handle {
+  resolve: (params: HandlerParams) => { why: string; fix?: string; docs?: string; data?: unknown },
+  reporters: readonly AnyDiagnosticReporter[],
+): (params?: HandlerParams, reporterOptions?: object) => Diagnostic<unknown> {
+  const handle = (params: HandlerParams = {}, reporterOptions: object = {}) => {
+    const { why, fix, docs, data } = resolve(params)
+    const diagnostic = new Diagnostic<unknown>(
+      { code, why, fix, docs, data, cause: params.cause, sources: params.sources },
+      handle,
+    )
+    for (const reporter of reporters) reporter(diagnostic, reporterOptions)
+    return diagnostic
+  }
+  // match by code, not handle identity: the prod Proxy builds a new handle on
+  // every access. `defineProperty` because the inherited
+  // `Function.prototype[Symbol.hasInstance]` is non-writable.
   return Object.defineProperty(handle, Symbol.hasInstance, {
     value: (value: unknown) => value instanceof Diagnostic && value.code === code,
   })
@@ -441,27 +455,18 @@ export function defineDiagnostics<
     // skip docs if set to false, otherwise use it or derive it from docsBase
     const docs = def.docs === false ? undefined : def.docs || deriveDocs(docsBase, code)
 
-    const handle = (
-      params: DiagnosticCallParams & Record<string, unknown> = {},
-      reporterOptions: any = {},
-    ): Diagnostic => {
-      const diagnostic = new Diagnostic(
-        {
-          code,
-          why: toValueWithArgs(def.why, params),
-          fix: toValueWithArgs(def.fix, params),
-          docs,
-          cause: params.cause,
-          sources: params.sources,
-          data: toValueWithArgs(def.data, params) as InferCodeData<Codes[typeof code]>,
-        },
-        handle,
-      )
-      for (const reporter of reporters) reporter(diagnostic, reporterOptions)
-      return diagnostic as Diagnostic<InferCodeData<Codes[typeof code]>>
-    }
+    const handle = normalizeHandler(
+      code,
+      (params) => ({
+        why: toValueWithArgs(def.why, params),
+        fix: toValueWithArgs(def.fix, params),
+        docs,
+        data: toValueWithArgs(def.data, params),
+      }),
+      reporters,
+    )
 
-    result[code] = matchCode(handle, code) as unknown as Diagnostics<Codes, Reporters>[typeof code]
+    result[code] = handle as unknown as Diagnostics<Codes, Reporters>[typeof code]
   }
 
   return result

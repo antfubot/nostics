@@ -1,10 +1,5 @@
-import type {
-  AnyDiagnosticReporter,
-  DiagnosticCallParams,
-  DiagnosticDefinition,
-  Diagnostics,
-} from './diagnostic'
-import { deriveDocs, Diagnostic, matchCode } from './diagnostic'
+import type { AnyDiagnosticReporter, DiagnosticDefinition, Diagnostics } from './diagnostic'
+import { deriveDocs, normalizeHandler } from './diagnostic'
 
 /**
  * Options for {@link defineProdDiagnostics}. A lean subset of
@@ -58,28 +53,10 @@ export function defineProdDiagnostics<
       // ignore symbol / non-string probes (e.g. `then`, `Symbol.toPrimitive`)
       if (typeof code !== 'string') return undefined
 
-      const handle = (
-        params: DiagnosticCallParams & Record<string, unknown> = {},
-        reporterOptions: any = {},
-      ): Diagnostic => {
-        const docs = deriveDocs(docsBase, code)
-        const diagnostic = new Diagnostic(
-          {
-            code,
-            // the code is already the `name`; an empty `why` keeps the thrown
-            // header down to `CODE` / `CODE: <docs>` instead of `CODE: CODE`
-            why: docs ?? '',
-            docs,
-            cause: params.cause,
-            sources: params.sources,
-          },
-          handle,
-        )
-        for (const reporter of reporters) reporter(diagnostic, reporterOptions)
-        return diagnostic
-      }
-
-      return matchCode(handle, code)
+      const docs = deriveDocs(docsBase, code)
+      // the code is already the `name`; an empty `why` keeps the thrown
+      // header down to `CODE` / `CODE: <docs>` instead of `CODE: CODE`
+      return normalizeHandler(code, () => ({ why: docs ?? '', docs }), reporters)
     },
   })
 }
